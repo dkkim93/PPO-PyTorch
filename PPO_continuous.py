@@ -1,10 +1,13 @@
+import os
 import torch
 import torch.nn as nn
-from torch.distributions import MultivariateNormal
 import gym
 import numpy as np
+from tensorboardX import SummaryWriter
+from torch.distributions import MultivariateNormal
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
 
 class Memory:
     def __init__(self):
@@ -21,27 +24,25 @@ class Memory:
         del self.rewards[:]
         del self.is_terminals[:]
 
+
 class ActorCritic(nn.Module):
     def __init__(self, state_dim, action_dim, action_std):
         super(ActorCritic, self).__init__()
-        # action mean range -1 to 1
-        self.actor =  nn.Sequential(
-                nn.Linear(state_dim, 64),
-                nn.Tanh(),
-                nn.Linear(64, 32),
-                nn.Tanh(),
-                nn.Linear(32, action_dim),
-                nn.Tanh()
-                )
-        # critic
+        self.actor = nn.Sequential(
+            nn.Linear(state_dim, 64),
+            nn.Tanh(),
+            nn.Linear(64, 32),
+            nn.Tanh(),
+            nn.Linear(32, action_dim),
+            nn.Tanh())
+
         self.critic = nn.Sequential(
-                nn.Linear(state_dim, 64),
-                nn.Tanh(),
-                nn.Linear(64, 32),
-                nn.Tanh(),
-                nn.Linear(32, 1)
-                )
-        self.action_var = torch.full((action_dim,), action_std*action_std).to(device)
+            nn.Linear(state_dim, 64),
+            nn.Tanh(),
+            nn.Linear(64, 32),
+            nn.Tanh(),
+            nn.Linear(32, 1))
+        self.action_var = torch.full((action_dim,), action_std * action_std).to(device)
         
     def forward(self):
         raise NotImplementedError
@@ -73,6 +74,7 @@ class ActorCritic(nn.Module):
         state_value = self.critic(state)
         
         return action_logprobs, torch.squeeze(state_value), dist_entropy
+
 
 class PPO:
     def __init__(self, state_dim, action_dim, action_std, lr, betas, gamma, K_epochs, eps_clip):
@@ -124,8 +126,8 @@ class PPO:
             # Finding Surrogate Loss:
             advantages = rewards - state_values.detach()   
             surr1 = ratios * advantages
-            surr2 = torch.clamp(ratios, 1-self.eps_clip, 1+self.eps_clip) * advantages
-            loss = -torch.min(surr1, surr2) + 0.5*self.MseLoss(state_values, rewards) - 0.01*dist_entropy
+            surr2 = torch.clamp(ratios, 1 - self.eps_clip, 1 + self.eps_clip) * advantages
+            loss = -torch.min(surr1, surr2) + 0.5 * self.MseLoss(state_values, rewards) - 0.01 * dist_entropy
             
             # take gradient step
             self.optimizer.zero_grad()
@@ -135,29 +137,32 @@ class PPO:
         # Copy new weights into old policy:
         self.policy_old.load_state_dict(self.policy.state_dict())
         
+
 def main():
-    ############## Hyperparameters ##############
-    env_name = "BipedalWalker-v2"
+    # Hyperparameters
+    env_name = "Pendulum-v0"
+    horizon = 64
     render = False
-    solved_reward = 300         # stop training if avg_reward > solved_reward
     log_interval = 20           # print avg reward in the interval
-    max_episodes = 10000        # max training episodes
+    max_episodes = 100000        # max training episodes
     max_timesteps = 1500        # max timesteps in one episode
-    
     update_timestep = 4000      # update policy every n timesteps
     action_std = 0.5            # constant std for action distribution (Multivariate Normal)
     K_epochs = 80               # update policy for K epochs
     eps_clip = 0.2              # clip parameter for PPO
     gamma = 0.99                # discount factor
-    
     lr = 0.0003                 # parameters for Adam optimizer
     betas = (0.9, 0.999)
-    
     random_seed = None
-    #############################################
-    
+
+    # Set logging
+    if not os.path.exists("./logs"):
+        os.makedirs("./logs")
+    tb_writer = SummaryWriter('./logs/tb_log')
+
     # creating environment
     env = gym.make(env_name)
+    env._max_episode_steps = horizon
     state_dim = env.observation_space.shape[0]
     action_dim = env.action_space.shape[0]
     
@@ -169,7 +174,7 @@ def main():
     
     memory = Memory()
     ppo = PPO(state_dim, action_dim, action_std, lr, betas, gamma, K_epochs, eps_clip)
-    print(lr,betas)
+    print(lr, betas)
     
     # logging variables
     running_reward = 0
@@ -177,10 +182,12 @@ def main():
     time_step = 0
     
     # training loop
-    for i_episode in range(1, max_episodes+1):
+    for i_episode in range(1, max_episodes + 1):
         state = env.reset()
-        for t in range(max_timesteps):
-            time_step +=1
+
+        for t in range(horizon):
+            time_step += 1
+
             # Running policy_old:
             action = ppo.select_action(state, memory)
             state, reward, done, _ = env.step(action)
@@ -194,7 +201,8 @@ def main():
                 ppo.update(memory)
                 memory.clear_memory()
                 time_step = 0
-            running_reward += reward
+
+            running_reward += reward * pow(gamma, t)
             if render:
                 env.render()
             if done:
@@ -202,25 +210,20 @@ def main():
         
         avg_length += t
         
-        # stop training if avg_reward > solved_reward
-        if running_reward > (log_interval*solved_reward):
-            print("########## Solved! ##########")
-            torch.save(ppo.policy.state_dict(), './PPO_continuous_solved_{}.pth'.format(env_name))
-            break
-        
         # save every 500 episodes
         if i_episode % 500 == 0:
             torch.save(ppo.policy.state_dict(), './PPO_continuous_{}.pth'.format(env_name))
             
         # logging
         if i_episode % log_interval == 0:
-            avg_length = int(avg_length/log_interval)
-            running_reward = int((running_reward/log_interval))
+            avg_length = int(avg_length / log_interval)
+            running_reward = int((running_reward / log_interval))
             
             print('Episode {} \t Avg length: {} \t Avg reward: {}'.format(i_episode, avg_length, running_reward))
+            tb_writer.add_scalar("reward", running_reward, i_episode)
             running_reward = 0
             avg_length = 0
             
+
 if __name__ == '__main__':
     main()
-    
