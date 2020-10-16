@@ -28,7 +28,7 @@ class Memory:
 
 
 class ActorCritic(nn.Module):
-    def __init__(self, state_dim, action_dim, action_std):
+    def __init__(self, state_dim, action_dim):
         super(ActorCritic, self).__init__()
 
         setattr(self, "actor_l1", nn.Linear(state_dim, 16))
@@ -77,17 +77,17 @@ class ActorCritic(nn.Module):
 
 
 class PPO:
-    def __init__(self, state_dim, action_dim, action_std, lr, betas, gamma, K_epochs, eps_clip):
+    def __init__(self, state_dim, action_dim, lr, betas, gamma, K_epochs, eps_clip):
         self.lr = lr
         self.betas = betas
         self.gamma = gamma
         self.eps_clip = eps_clip
         self.K_epochs = K_epochs
         
-        self.policy = ActorCritic(state_dim, action_dim, action_std).to(device)
+        self.policy = ActorCritic(state_dim, action_dim).to(device)
         self.optimizer = torch.optim.Adam(self.policy.parameters(), lr=lr, betas=betas)
         
-        self.policy_old = ActorCritic(state_dim, action_dim, action_std).to(device)
+        self.policy_old = ActorCritic(state_dim, action_dim).to(device)
         self.policy_old.load_state_dict(self.policy.state_dict())
         
         self.MseLoss = nn.MSELoss()
@@ -143,14 +143,13 @@ def main():
     env_name = "pointmass-v0"
     horizon = 64
     render = False
-    log_interval = 20           # print avg reward in the interval
-    max_episodes = 100000        # max training episodes
-    update_timestep = 10      # update policy every n timesteps
-    action_std = 0.5            # constant std for action distribution (Multivariate Normal)
-    K_epochs = 80               # update policy for K epochs
-    eps_clip = 0.2              # clip parameter for PPO
-    gamma = 0.99                # discount factor
-    lr = 0.0003                 # parameters for Adam optimizer
+    log_interval = 20        # print avg reward in the interval
+    max_episodes = 100000    # max training episodes
+    update_timestep = 20     # update policy every n timesteps
+    K_epochs = 50            # update policy for K epochs
+    eps_clip = 0.2           # clip parameter for PPO
+    gamma = 0.99             # discount factor
+    lr = 0.0003              # parameters for Adam optimizer
     betas = (0.9, 0.999)
     random_seed = None
 
@@ -173,7 +172,7 @@ def main():
         np.random.seed(random_seed)
     
     memory = Memory()
-    ppo = PPO(state_dim, action_dim, action_std, lr, betas, gamma, K_epochs, eps_clip)
+    ppo = PPO(state_dim, action_dim, lr, betas, gamma, K_epochs, eps_clip)
     
     # logging variables
     running_reward = 0
