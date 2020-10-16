@@ -1,10 +1,12 @@
 import os
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import gym
 import numpy as np
+from collections import OrderedDict
 from tensorboardX import SummaryWriter
-from torch.distributions import MultivariateNormal
+from torch.distributions import Normal
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -28,32 +30,35 @@ class Memory:
 class ActorCritic(nn.Module):
     def __init__(self, state_dim, action_dim, action_std):
         super(ActorCritic, self).__init__()
-        self.actor = nn.Sequential(
-            nn.Linear(state_dim, 64),
-            nn.Tanh(),
-            nn.Linear(64, 32),
-            nn.Tanh(),
-            nn.Linear(32, action_dim),
-            nn.Tanh())
+
+        setattr(self, "actor_l1", nn.Linear(state_dim, 16))
+        setattr(self, "actor_l2", nn.Linear(16, 16))
+        setattr(self, "actor_l3_mu", nn.Linear(16, action_dim))
+        setattr(self, "actor_l3_std", nn.Linear(16, action_dim))
 
         self.critic = nn.Sequential(
-            nn.Linear(state_dim, 64),
+            nn.Linear(state_dim, 16),
             nn.Tanh(),
-            nn.Linear(64, 32),
+            nn.Linear(16, 16),
             nn.Tanh(),
-            nn.Linear(32, 1))
-        self.action_var = torch.full((action_dim,), action_std * action_std).to(device)
-        
-    def forward(self):
-        raise NotImplementedError
-    
+            nn.Linear(16, 1))
+
+    def forward(self, x):
+        params = OrderedDict(self.named_parameters())
+
+        x = F.linear(x, weight=params["actor_l1.weight"], bias=params["actor_l1.bias"])
+        x = F.relu(x)
+        x = F.linear(x, weight=params["actor_l2.weight"], bias=params["actor_l2.bias"])
+        x = F.relu(x)
+        mu = F.linear(x, weight=params["actor_l3_mu.weight"], bias=params["actor_l3_mu.bias"])
+        std = F.linear(x, weight=params["actor_l3_std.weight"], bias=params["actor_l3_std.bias"])
+        return mu, std
+
     def act(self, state, memory):
-        action_mean = self.actor(state)
-        cov_mat = torch.diag(self.action_var).to(device)
-        
-        dist = MultivariateNormal(action_mean, cov_mat)
+        mu, std = self(state)
+        dist = Normal(mu, F.softplus(std) + 1e-5)
         action = dist.sample()
-        action_logprob = dist.log_prob(action)
+        action_logprob = torch.sum(dist.log_prob(action), dim=-1)
         
         memory.states.append(state)
         memory.actions.append(action)
@@ -62,15 +67,10 @@ class ActorCritic(nn.Module):
         return action.detach()
     
     def evaluate(self, state, action):   
-        action_mean = self.actor(state)
-        
-        action_var = self.action_var.expand_as(action_mean)
-        cov_mat = torch.diag_embed(action_var).to(device)
-        
-        dist = MultivariateNormal(action_mean, cov_mat)
-        
-        action_logprobs = dist.log_prob(action)
-        dist_entropy = dist.entropy()
+        mu, std = self(state)
+        dist = Normal(mu, F.softplus(std) + 1e-5)
+        action_logprobs = torch.sum(dist.log_prob(action), dim=-1)
+        dist_entropy = torch.sum(dist.entropy(), dim=-1)
         state_value = self.critic(state)
         
         return action_logprobs, torch.squeeze(state_value), dist_entropy
