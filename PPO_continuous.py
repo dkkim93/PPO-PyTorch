@@ -140,13 +140,12 @@ class PPO:
 
 def main():
     # Hyperparameters
-    env_name = "Pendulum-v0"
+    env_name = "pointmass-v0"
     horizon = 64
     render = False
     log_interval = 20           # print avg reward in the interval
     max_episodes = 100000        # max training episodes
-    max_timesteps = 1500        # max timesteps in one episode
-    update_timestep = 4000      # update policy every n timesteps
+    update_timestep = 10      # update policy every n timesteps
     action_std = 0.5            # constant std for action distribution (Multivariate Normal)
     K_epochs = 80               # update policy for K epochs
     eps_clip = 0.2              # clip parameter for PPO
@@ -161,6 +160,7 @@ def main():
     tb_writer = SummaryWriter('./logs/tb_log')
 
     # creating environment
+    import gym_env
     env = gym.make(env_name)
     env._max_episode_steps = horizon
     state_dim = env.observation_space.shape[0]
@@ -174,7 +174,6 @@ def main():
     
     memory = Memory()
     ppo = PPO(state_dim, action_dim, action_std, lr, betas, gamma, K_epochs, eps_clip)
-    print(lr, betas)
     
     # logging variables
     running_reward = 0
